@@ -3,6 +3,7 @@ package drain
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -17,7 +18,7 @@ type Config struct {
 	MaxChildren     int
 	ExtraDelimiters []string
 	MaxClusters     int
-	ParamString     string
+	ParamPatterns   map[string]*regexp.Regexp
 	Tokenizer       func(string) []string
 }
 
@@ -91,12 +92,25 @@ func DefaultConfig() *Config {
 		ClusterDepth: 4,
 		SimTh:        0.4,
 		MaxChildren:  100,
-		ParamString:  "*",
-		Tokenizer:    splitBySpace,
+		ParamPatterns: map[string]*regexp.Regexp{
+			"*": regexp.MustCompile(`.*`),
+		},
+		Tokenizer: SpaceTokenizer,
 	}
 }
 
-func splitBySpace(content string) []string {
+func NewConfig(tokenizer func(string) []string, paramPatterns map[string]string) *Config {
+	config := DefaultConfig()
+	config.Tokenizer = tokenizer
+	config.ParamPatterns = make(map[string]*regexp.Regexp)
+	for k, v := range paramPatterns {
+		config.ParamPatterns[k] = regexp.MustCompile(v)
+	}
+
+	return config
+}
+
+func SpaceTokenizer(content string) []string {
 	content = strings.TrimSpace(content)
 	return strings.Split(content, " ")
 }
@@ -173,6 +187,15 @@ func (d *Drain) Match(content string) *Cluster {
 	return matchCluster
 }
 
+func (d *Drain) getParamString(token string) string {
+	for paramPattern, paramPatternRegexp := range d.config.ParamPatterns {
+		if paramPatternRegexp.MatchString(token) {
+			return paramPattern
+		}
+	}
+	return ""
+}
+
 func (d *Drain) treeSearch(rootNode *Node, tokens []string, simTh float64, includeParams bool) *Cluster {
 	tokenCount := len(tokens)
 
@@ -205,7 +228,7 @@ func (d *Drain) treeSearch(rootNode *Node, tokens []string, simTh float64, inclu
 		keyToChildNode := curNode.keyToChildNode
 		curNode, ok = keyToChildNode[token]
 		if !ok { // no exact next token exist, try wildcard node
-			curNode, ok = keyToChildNode[d.config.ParamString]
+			curNode, ok = keyToChildNode[d.getParamString(token)]
 		}
 		if !ok { // no wildcard node exist
 			return nil
@@ -254,7 +277,8 @@ func (d *Drain) getSeqDistance(seq1, seq2 []string, includeParams bool) (float64
 	for i := range seq1 {
 		token1 := seq1[i]
 		token2 := seq2[i]
-		if token1 == d.config.ParamString {
+		_, isParamString1 := d.config.ParamPatterns[token1]
+		if isParamString1 {
 			paramCount++
 		} else if token1 == token2 {
 			simTokens++
@@ -302,15 +326,16 @@ func (d *Drain) addSeqToPrefixTree(rootNode *Node, cluster *Cluster) {
 
 		// if token not matched in this layer of existing tree.
 		if _, ok = curNode.keyToChildNode[token]; !ok {
+			paramString := d.getParamString(token)
 			// if token not matched in this layer of existing tree.
 			if !d.hasNumbers(token) {
-				if _, ok = curNode.keyToChildNode[d.config.ParamString]; ok {
+				if _, ok = curNode.keyToChildNode[paramString]; ok {
 					if len(curNode.keyToChildNode) < d.config.MaxChildren {
 						newNode := createNode()
 						curNode.keyToChildNode[token] = newNode
 						curNode = newNode
 					} else {
-						curNode = curNode.keyToChildNode[d.config.ParamString]
+						curNode = curNode.keyToChildNode[paramString]
 					}
 				} else {
 					if len(curNode.keyToChildNode)+1 < d.config.MaxChildren {
@@ -319,19 +344,19 @@ func (d *Drain) addSeqToPrefixTree(rootNode *Node, cluster *Cluster) {
 						curNode = newNode
 					} else if len(curNode.keyToChildNode)+1 == d.config.MaxChildren {
 						newNode := createNode()
-						curNode.keyToChildNode[d.config.ParamString] = newNode
+						curNode.keyToChildNode[paramString] = newNode
 						curNode = newNode
 					} else {
-						curNode = curNode.keyToChildNode[d.config.ParamString]
+						curNode = curNode.keyToChildNode[paramString]
 					}
 				}
 			} else {
-				if _, ok = curNode.keyToChildNode[d.config.ParamString]; !ok {
+				if _, ok = curNode.keyToChildNode[paramString]; !ok {
 					newNode := createNode()
-					curNode.keyToChildNode[d.config.ParamString] = newNode
+					curNode.keyToChildNode[paramString] = newNode
 					curNode = newNode
 				} else {
-					curNode = curNode.keyToChildNode[d.config.ParamString]
+					curNode = curNode.keyToChildNode[paramString]
 				}
 			}
 		} else {
@@ -352,15 +377,15 @@ func (d *Drain) hasNumbers(s string) bool {
 	return false
 }
 
-func (d *Drain) createTemplate(seq1, seq2 []string) []string {
-	if len(seq1) != len(seq2) {
-		panic("seq1 seq2 be of same length")
+func (d *Drain) createTemplate(source, target []string) []string {
+	if len(source) != len(target) {
+		panic("source, target be of same length")
 	}
-	retVal := make([]string, len(seq2))
-	copy(retVal, seq2)
-	for i := range seq1 {
-		if seq1[i] != seq2[i] {
-			retVal[i] = d.config.ParamString
+	retVal := make([]string, len(target))
+	copy(retVal, target)
+	for i := range source {
+		if source[i] != target[i] {
+			retVal[i] = d.getParamString(source[i])
 		}
 	}
 	return retVal

@@ -7,7 +7,11 @@ import (
 )
 
 func main() {
-	logger := drain.New(drain.DefaultConfig())
+	logger := drain.New(drain.NewConfig(drain.SpaceTokenizer, map[string]string{
+		"{ip}":   `^([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})$`,
+		"{hex}":  `^0x([0-9a-fA-F]{1,8})$`,
+		"{name}": `^\w+$`,
+	}))
 
 	for _, line := range []string{
 		"connected to 10.0.0.1",
@@ -29,6 +33,6 @@ func main() {
 	if cluster == nil {
 		println("no match")
 	} else {
-		fmt.Printf("cluster matched: %s", cluster.String())
+		fmt.Printf("cluster matched: %s\n", cluster.String())
 	}
 }

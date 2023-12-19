@@ -12,11 +12,15 @@ package main
 import (
 	"fmt"
 
-	"github.com/faceair/drain"
+	"github.com/mrlyc/drain"
 )
 
 func main() {
-	logger := drain.New(drain.DefaultConfig())
+	logger := drain.New(drain.NewConfig(drain.SpaceTokenizer, map[string]string{
+		"{ip}":   `^([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})$`,
+		"{hex}":  `^0x([0-9a-fA-F]{1,8})$`,
+		"{name}": `^\w+$`,
+	}))
 
 	for _, line := range []string{
 		"connected to 10.0.0.1",
@@ -38,17 +42,17 @@ func main() {
 	if cluster == nil {
 		println("no match")
 	} else {
-		fmt.Printf("cluster matched: %s", cluster.String())
+		fmt.Printf("cluster matched: %s\n", cluster.String())
 	}
 }
 ```
 
 Output:
 ```
-id={1} : size={3} : connected to <*>
-id={2} : size={2} : Hex number <*>
-id={3} : size={2} : user <*> logged in
-cluster matched: id={3} : size={2} : user <*> logged in
+id={1} : size={3} : connected to {ip}
+id={2} : size={2} : Hex number {name}
+id={3} : size={2} : user {name} logged in
+cluster matched: id={3} : size={2} : user {name} logged in
 ```
 
 ## LICENSE
