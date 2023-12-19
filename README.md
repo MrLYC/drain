@@ -19,7 +19,7 @@ func main() {
 	logger := drain.New(drain.NewConfig(drain.SpaceTokenizer, map[string]string{
 		"{ip}":   `^([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})$`,
 		"{hex}":  `^0x([0-9a-fA-F]{1,8})$`,
-		"{name}": `^\w+$`,
+		"{name}": `^[a-zA-Z]+$`,
 	}))
 
 	for _, line := range []string{
@@ -50,7 +50,7 @@ func main() {
 Output:
 ```
 id={1} : size={3} : connected to {ip}
-id={2} : size={2} : Hex number {name}
+id={2} : size={2} : Hex number {hex}
 id={3} : size={2} : user {name} logged in
 cluster matched: id={3} : size={2} : user {name} logged in
 ```

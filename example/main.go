@@ -10,7 +10,7 @@ func main() {
 	logger := drain.New(drain.NewConfig(drain.SpaceTokenizer, map[string]string{
 		"{ip}":   `^([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})$`,
 		"{hex}":  `^0x([0-9a-fA-F]{1,8})$`,
-		"{name}": `^\w+$`,
+		"{name}": `^[a-zA-Z]+$`,
 	}))
 
 	for _, line := range []string{
