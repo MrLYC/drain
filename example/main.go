@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/faceair/drain"
+	"github.com/mrlyc/drain"
 )
 
 func main() {

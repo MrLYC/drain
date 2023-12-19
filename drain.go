@@ -12,61 +12,66 @@ import (
 
 type Config struct {
 	maxNodeDepth    int
-	LogClusterDepth int
+	ClusterDepth    int
 	SimTh           float64
 	MaxChildren     int
 	ExtraDelimiters []string
 	MaxClusters     int
 	ParamString     string
+	Tokenizer       func(string) []string
 }
 
-type LogCluster struct {
-	logTemplateTokens []string
-	id                int
-	size              int
+type Cluster struct {
+	tokens []string
+	id     int
+	size   int
 }
 
-func (c *LogCluster) getTemplate() string {
-	return strings.Join(c.logTemplateTokens, " ")
+// Tokens returns the tokens of the Cluster.
+//
+// It does not take any parameters.
+// It returns a slice of strings ([]string).
+func (c *Cluster) Tokens() []string {
+	return c.tokens
 }
-func (c *LogCluster) String() string {
-	return fmt.Sprintf("id={%d} : size={%d} : %s", c.id, c.size, c.getTemplate())
+func (c *Cluster) String() string {
+	return fmt.Sprintf("id={%d} : size={%d} : %s", c.id, c.size, strings.Join(c.tokens, " "))
 }
 
-func createLogClusterCache(maxSize int) *LogClusterCache {
+func createClusterCache(maxSize int) *ClusterCache {
 	if maxSize == 0 {
 		maxSize = math.MaxInt
 	}
 	cache, _ := simplelru.NewLRU(maxSize, nil)
-	return &LogClusterCache{
+	return &ClusterCache{
 		cache: cache,
 	}
 }
 
-type LogClusterCache struct {
+type ClusterCache struct {
 	cache simplelru.LRUCache
 }
 
-func (c *LogClusterCache) Values() []*LogCluster {
-	values := make([]*LogCluster, 0)
+func (c *ClusterCache) Values() []*Cluster {
+	values := make([]*Cluster, 0)
 	for _, key := range c.cache.Keys() {
 		if value, ok := c.cache.Peek(key); ok {
-			values = append(values, value.(*LogCluster))
+			values = append(values, value.(*Cluster))
 		}
 	}
 	return values
 }
 
-func (c *LogClusterCache) Set(key int, cluster *LogCluster) {
+func (c *ClusterCache) Set(key int, cluster *Cluster) {
 	c.cache.Add(key, cluster)
 }
 
-func (c *LogClusterCache) Get(key int) *LogCluster {
+func (c *ClusterCache) Get(key int) *Cluster {
 	cluster, ok := c.cache.Get(key)
 	if !ok {
 		return nil
 	}
-	return cluster.(*LogCluster)
+	return cluster.(*Cluster)
 }
 
 func createNode() *Node {
@@ -83,23 +88,36 @@ type Node struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		LogClusterDepth: 4,
-		SimTh:           0.4,
-		MaxChildren:     100,
-		ParamString:     "<*>",
+		ClusterDepth: 4,
+		SimTh:        0.4,
+		MaxChildren:  100,
+		ParamString:  "*",
+		Tokenizer:    splitBySpace,
 	}
 }
 
+func splitBySpace(content string) []string {
+	content = strings.TrimSpace(content)
+	return strings.Split(content, " ")
+}
+
+// New initializes and returns a new instance of Drain.
+//
+// It takes a pointer to a Config struct as a parameter.
+// The function panics if the ClusterDepth field of the Config struct is less than 3.
+// The function sets the maxNodeDepth field of the Config struct to the ClusterDepth minus 2.
+// The function creates a new Drain struct with the specified Config and initializes its fields.
+// The function returns the newly created Drain instance.
 func New(config *Config) *Drain {
-	if config.LogClusterDepth < 3 {
+	if config.ClusterDepth < 3 {
 		panic("depth argument must be at least 3")
 	}
-	config.maxNodeDepth = config.LogClusterDepth - 2
+	config.maxNodeDepth = config.ClusterDepth - 2
 
 	d := &Drain{
 		config:      config,
 		rootNode:    createNode(),
-		idToCluster: createLogClusterCache(config.MaxClusters),
+		idToCluster: createClusterCache(config.MaxClusters),
 	}
 	return d
 }
@@ -107,32 +125,40 @@ func New(config *Config) *Drain {
 type Drain struct {
 	config          *Config
 	rootNode        *Node
-	idToCluster     *LogClusterCache
+	idToCluster     *ClusterCache
 	clustersCounter int
 }
 
-func (d *Drain) Clusters() []*LogCluster {
+// Clusters returns an array of pointers to Cluster objects.
+//
+// No parameters.
+// Returns an array of pointers to Cluster objects.
+func (d *Drain) Clusters() []*Cluster {
 	return d.idToCluster.Values()
 }
 
-func (d *Drain) Train(content string) *LogCluster {
-	contentTokens := d.getContentAsTokens(content)
+// Train trains the Drain model with the given content and returns the matched cluster.
+//
+// The content parameter is a string representing the content to be trained.
+// The function returns a pointer to a Cluster.
+func (d *Drain) Train(content string) *Cluster {
+	contentTokens := d.config.Tokenizer(content)
 
 	matchCluster := d.treeSearch(d.rootNode, contentTokens, d.config.SimTh, false)
-	// Match no existing log cluster
+	// Match no existing cluster
 	if matchCluster == nil {
 		d.clustersCounter++
 		clusterID := d.clustersCounter
-		matchCluster = &LogCluster{
-			logTemplateTokens: contentTokens,
-			id:                clusterID,
-			size:              1,
+		matchCluster = &Cluster{
+			tokens: contentTokens,
+			id:     clusterID,
+			size:   1,
 		}
 		d.idToCluster.Set(clusterID, matchCluster)
 		d.addSeqToPrefixTree(d.rootNode, matchCluster)
 	} else {
-		newTemplateTokens := d.createTemplate(contentTokens, matchCluster.logTemplateTokens)
-		matchCluster.logTemplateTokens = newTemplateTokens
+		newTemplateTokens := d.createTemplate(contentTokens, matchCluster.tokens)
+		matchCluster.tokens = newTemplateTokens
 		matchCluster.size++
 		// Touch cluster to update its state in the cache.
 		d.idToCluster.Get(matchCluster.id)
@@ -141,21 +167,13 @@ func (d *Drain) Train(content string) *LogCluster {
 }
 
 // Match against an already existing cluster. Match shall be perfect (sim_th=1.0). New cluster will not be created as a result of this call, nor any cluster modifications.
-func (d *Drain) Match(content string) *LogCluster {
-	contentTokens := d.getContentAsTokens(content)
+func (d *Drain) Match(content string) *Cluster {
+	contentTokens := d.config.Tokenizer(content)
 	matchCluster := d.treeSearch(d.rootNode, contentTokens, 1.0, true)
 	return matchCluster
 }
 
-func (d *Drain) getContentAsTokens(content string) []string {
-	content = strings.TrimSpace(content)
-	for _, extraDelimiter := range d.config.ExtraDelimiters {
-		content = strings.Replace(content, extraDelimiter, " ", -1)
-	}
-	return strings.Split(content, " ")
-}
-
-func (d *Drain) treeSearch(rootNode *Node, tokens []string, simTh float64, includeParams bool) *LogCluster {
+func (d *Drain) treeSearch(rootNode *Node, tokens []string, simTh float64, includeParams bool) *Cluster {
 	tokenCount := len(tokens)
 
 	// at first level, children are grouped by token (word) count
@@ -166,12 +184,12 @@ func (d *Drain) treeSearch(rootNode *Node, tokens []string, simTh float64, inclu
 		return nil
 	}
 
-	// handle case of empty log string - return the single cluster in that group
+	// handle case of empty string - return the single cluster in that group
 	if tokenCount == 0 {
 		return d.idToCluster.Get(curNode.clusterIDs[0])
 	}
 
-	// find the leaf node for this log - a path of nodes matching the first N tokens (N=tree depth)
+	// find the leaf node for this - a path of nodes matching the first N tokens (N=tree depth)
 	curNodeDepth := 1
 	for _, token := range tokens {
 		// at max depth
@@ -200,9 +218,9 @@ func (d *Drain) treeSearch(rootNode *Node, tokens []string, simTh float64, inclu
 	return cluster
 }
 
-// fastMatch Find the best match for a log message (represented as tokens) versus a list of clusters
-func (d *Drain) fastMatch(clusterIDs []int, tokens []string, simTh float64, includeParams bool) *LogCluster {
-	var matchCluster, maxCluster *LogCluster
+// fastMatch Find the best match for a message (represented as tokens) versus a list of clusters
+func (d *Drain) fastMatch(clusterIDs []int, tokens []string, simTh float64, includeParams bool) *Cluster {
+	var matchCluster, maxCluster *Cluster
 
 	maxSim := -1.0
 	maxParamCount := -1
@@ -213,7 +231,7 @@ func (d *Drain) fastMatch(clusterIDs []int, tokens []string, simTh float64, incl
 		if cluster == nil {
 			continue
 		}
-		curSim, paramCount := d.getSeqDistance(cluster.logTemplateTokens, tokens, includeParams)
+		curSim, paramCount := d.getSeqDistance(cluster.tokens, tokens, includeParams)
 		if curSim > maxSim || (curSim == maxSim && paramCount > maxParamCount) {
 			maxSim = curSim
 			maxParamCount = paramCount
@@ -249,8 +267,8 @@ func (d *Drain) getSeqDistance(seq1, seq2 []string, includeParams bool) (float64
 	return retVal, paramCount
 }
 
-func (d *Drain) addSeqToPrefixTree(rootNode *Node, cluster *LogCluster) {
-	tokenCount := len(cluster.logTemplateTokens)
+func (d *Drain) addSeqToPrefixTree(rootNode *Node, cluster *Cluster) {
+	tokenCount := len(cluster.tokens)
 	tokenCountStr := strconv.Itoa(tokenCount)
 
 	firstLayerNode, ok := rootNode.keyToChildNode[tokenCountStr]
@@ -260,15 +278,15 @@ func (d *Drain) addSeqToPrefixTree(rootNode *Node, cluster *LogCluster) {
 	}
 	curNode := firstLayerNode
 
-	// handle case of empty log string
+	// handle case of empty string
 	if tokenCount == 0 {
 		curNode.clusterIDs = append(curNode.clusterIDs, cluster.id)
 		return
 	}
 
 	currentDepth := 1
-	for _, token := range cluster.logTemplateTokens {
-		// if at max depth or this is last token in template - add current log cluster to the leaf node
+	for _, token := range cluster.tokens {
+		// if at max depth or this is last token in template - add current cluster to the leaf node
 		if (currentDepth >= d.config.maxNodeDepth) || currentDepth >= tokenCount {
 			// clean up stale clusters before adding a new one.
 			newClusterIDs := make([]int, 0, len(curNode.clusterIDs))
